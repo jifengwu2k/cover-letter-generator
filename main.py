@@ -219,6 +219,7 @@ class MainWindow(QMainWindow):
             self.chat_display.append(f"You: {user_message}")
             self.chat_input.clear()
             
+            # TODO: ChatGPT integration
             # Generate a random reply
             responses = [
                 "Hello! How can I help you today?",
@@ -230,11 +231,16 @@ class MainWindow(QMainWindow):
             random_reply = random.choice(responses)
             self.chat_display.append(f"Bot: {random_reply}")
 
-    # Check that the API key and resume are non-empty every time the app starts.
+    # Check that the API key, resume, and initial prompt are non-empty every time the app starts.
     def check_settings(self):
         settings_dialog = SettingsDialog(self, self.settings)
-        if not os.path.exists("settings.json") or not self.settings.api_key or not self.settings.resume:
-            QMessageBox.information(self, "Settings Required", "Please ensure both API key and resume are configured.")
+        if not (
+            os.path.exists("settings.json") 
+            and self.settings.api_key
+            and self.settings.resume
+            and self.settings.initial_prompt
+        ):
+            QMessageBox.information(self, "Settings Required", "Please ensure the API key, resume, and initial prompt are configured.")
             settings_dialog.exec()
         else:
             settings_dialog.load_settings()
@@ -262,7 +268,26 @@ class MainWindow(QMainWindow):
         if self.html_editor.toPlainText().strip() == "":
             QMessageBox.warning(self, "Incomplete Action", "Please paste the webpage content before generating a cover letter.")
         else:
+            # Generate and display the mock cover letter
+            self.cover_letter_display.setPlainText(self.generate_mock_cover_letter())
             self.tab_widget.setCurrentIndex(1)
+
+    def generate_mock_cover_letter(self):
+        # TODO: ChatGPT integration
+        # Here is a simple mock cover letter template
+        cover_letter = (
+            "Dear Hiring Manager,\n\n"
+            "I am writing to express my interest in the [Position Name] at [Company Name] as advertised. "
+            "With a strong background in [Relevant Skills] and a proven track record in [Relevant Achievements], "
+            "I am confident in my ability to contribute to your team.\n\n"
+            "Throughout my career, I have developed a passion for [Field or Industry] and have honed my skills in [Specific Skills]. "
+            "I am particularly excited about this opportunity because of [Reasons You're Interested in the Company or Role].\n\n"
+            "I am eager to bring my expertise in [Your Expertise] to [Company Name] and am confident that my background makes me a strong candidate for this position.\n\n"
+            "Thank you for considering my application. I look forward to the possibility of discussing this exciting opportunity with you further.\n\n"
+            "Sincerely,\n"
+            "[Your Name]"
+        )
+        return cover_letter
 
     def go_to_paste_webpage(self):
         self.tab_widget.setCurrentIndex(0)
