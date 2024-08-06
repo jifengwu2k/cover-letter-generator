@@ -31,6 +31,7 @@ from markdownify import markdownify as md
 class Settings:
     api_key: str = ""
     resume: str = ""
+    initial_prompt: str = ""
 
 
 class SettingsDialog(QDialog):
@@ -51,6 +52,9 @@ class SettingsDialog(QDialog):
 
         self.resume_input = QTextEdit()
         self.api_layout.addRow("Resume:", self.resume_input)
+
+        self.initial_prompt_input = QTextEdit()
+        self.api_layout.addRow("Initial Prompt:", self.initial_prompt_input)
 
         self.api_tab.setLayout(self.api_layout)
 
@@ -73,6 +77,12 @@ class SettingsDialog(QDialog):
     def save_settings(self):
         self.settings.api_key = self.api_key_input.text()
         self.settings.resume = self.resume_input.toPlainText()
+        self.settings.initial_prompt = self.initial_prompt_input.toPlainText()
+
+        if not self.settings.api_key or not self.settings.resume or not self.settings.initial_prompt:
+            QMessageBox.warning(self, "Incomplete Settings", "Please ensure that all settings are filled out.")
+            return
+
         with open("settings.json", "w") as settings_file:
             json.dump(self.settings.__dict__, settings_file)
         self.accept()
@@ -83,6 +93,14 @@ class SettingsDialog(QDialog):
                 self.settings.__dict__.update(json.load(settings_file))
                 self.api_key_input.setText(self.settings.api_key)
                 self.resume_input.setPlainText(self.settings.resume)
+                self.initial_prompt_input.setPlainText(self.settings.initial_prompt)
+
+        if not self.settings.api_key:
+            self.api_key_input.setPlaceholderText("Enter your API key here")
+        if not self.settings.resume:
+            self.resume_input.setPlaceholderText("Enter your resume here")
+        if not self.settings.initial_prompt:
+            self.initial_prompt_input.setPlaceholderText("Enter the initial prompt here")
 
 
 class HtmlTextEdit(QTextEdit):
@@ -119,16 +137,6 @@ class MainWindow(QMainWindow):
         # Tabs
         self.create_tabs()
 
-        # Navigation Buttons
-        self.navigation_layout = QHBoxLayout()
-        self.prev_button = QPushButton("Previous Tab")
-        self.next_button = QPushButton("Next Tab")
-        self.prev_button.clicked.connect(self.go_to_previous_tab)
-        self.next_button.clicked.connect(self.go_to_next_tab)
-        self.navigation_layout.addWidget(self.prev_button)
-        self.navigation_layout.addWidget(self.next_button)
-        self.main_layout.addLayout(self.navigation_layout)
-
         # Menu Bar
         self.menu_bar = QMenuBar()
         self.setMenuBar(self.menu_bar)
@@ -154,20 +162,19 @@ class MainWindow(QMainWindow):
         # Check settings on startup
         self.check_settings()
 
-        # Keyboard Shortcuts
-        self.shortcut_prev_tab = QShortcut(QKeySequence("Ctrl+Shift+Tab"), self)
-        self.shortcut_next_tab = QShortcut(QKeySequence("Ctrl+Tab"), self)
-        self.shortcut_prev_tab.activated.connect(self.go_to_previous_tab)
-        self.shortcut_next_tab.activated.connect(self.go_to_next_tab)
-
     def create_tabs(self):
-        # Tab 1 - Paste Position Offering Webpage
+        # Tab 1 - Paste Webpage
         self.tab1 = QWidget()
         self.tab1_layout = QVBoxLayout()
         self.tab1.setLayout(self.tab1_layout)
 
         self.html_editor = HtmlTextEdit()
         self.tab1_layout.addWidget(self.html_editor)
+
+        # Button to generate cover letter
+        self.generate_button = QPushButton("Generate Cover Letter")
+        self.generate_button.clicked.connect(self.generate_cover_letter)
+        self.tab1_layout.addWidget(self.generate_button)
 
         self.tab_widget.addTab(self.tab1, "Paste Webpage")
 
@@ -176,18 +183,20 @@ class MainWindow(QMainWindow):
         self.tab2_layout = QVBoxLayout()
         self.tab2.setLayout(self.tab2_layout)
 
-        # Mock Cover Letter display at the top
         self.cover_letter_display = QTextEdit()
         self.cover_letter_display.setReadOnly(True)
         self.cover_letter_display.setPlaceholderText("Your generated cover letter will appear here.")
         self.tab2_layout.addWidget(self.cover_letter_display)
 
-        # Button to copy cover letter to clipboard
         self.copy_button = QPushButton("Copy Cover Letter")
         self.copy_button.clicked.connect(self.copy_cover_letter_to_clipboard)
         self.tab2_layout.addWidget(self.copy_button)
 
-        # Chat interface at the bottom
+        # Button to repaste webpage content
+        self.repaste_button = QPushButton("Repaste Web Page")
+        self.repaste_button.clicked.connect(self.go_to_paste_webpage)
+        self.tab2_layout.addWidget(self.repaste_button)
+
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
         self.tab2_layout.addWidget(self.chat_display)
@@ -200,6 +209,9 @@ class MainWindow(QMainWindow):
         self.tab2_layout.addWidget(self.send_button)
 
         self.tab_widget.addTab(self.tab2, "Cover Letter")
+
+        # Disable tab switching by clicking
+        self.tab_widget.tabBar().setEnabled(False)
 
     def send_message(self):
         user_message = self.chat_input.text()
@@ -246,13 +258,14 @@ class MainWindow(QMainWindow):
     def show_about_dialog(self):
         QMessageBox.about(self, "About", "This is a PySide6 GUI application.")
 
-    def go_to_previous_tab(self):
-        current_index = self.tab_widget.currentIndex()
-        if current_index > 0:
-            self.tab_widget.setCurrentIndex(current_index - 1)
+    def generate_cover_letter(self):
+        if self.html_editor.toPlainText().strip() == "":
+            QMessageBox.warning(self, "Incomplete Action", "Please paste the webpage content before generating a cover letter.")
+        else:
+            self.tab_widget.setCurrentIndex(1)
 
-    def go_to_next_tab(self):
-        current_index = self.tab_widget.currentIndex()
+    def go_to_paste_webpage(self):
+        self.tab_widget.setCurrentIndex(0)
 
         # Modify the go_to_next_tab() method to include a check ensuring that the HTML editor in the first tab is not empty before allowing navigation to the next tab.
         if current_index == 0 and self.html_editor.toPlainText().strip() == "":
