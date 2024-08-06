@@ -1,10 +1,12 @@
+import concurrent.futures
 import json
 import os
 import random
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from PySide6.QtCore import Slot, QMimeData
+from PySide6.QtCore import Slot, QMimeData, Qt, QTimer
 from PySide6.QtGui import QTextDocumentFragment, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -18,12 +20,19 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QMenuBar,
+    QProgressBar,
     QStatusBar,
     QTabWidget,
     QTextEdit,
     QHBoxLayout,
     QFormLayout
 )
+from langchain.chains import ConversationChain
+from langchain.chains.base import Chain
+from langchain.chains.conversation.memory import ConversationBufferMemory
+from langchain_community.callbacks.manager import get_openai_callback
+from langchain.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
 from markdownify import markdownify as md
 
 
@@ -115,12 +124,61 @@ class HtmlTextEdit(QTextEdit):
             super().insertFromMimeData(source)
 
 
+# ChatGPT integration
+def count_tokens(chain: Chain, query: str):
+    with get_openai_callback() as callback:
+        result = chain.run(query)
+        return result, callback.total_tokens
+
+
+class LoadingDialog(QDialog):
+    def __init__(self, parent=None, title="Please Wait", text="Processing, please wait..."):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setWindowFlag(Qt.WindowStaysOnTopHint)
+
+        # Set background color to white
+        self.setStyleSheet("background-color: white;")
+
+        layout = QVBoxLayout()
+        self.label = QLabel(text)
+        layout.addWidget(self.label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        layout.addWidget(self.progress_bar)
+
+        self.setLayout(layout)
+
+    def closeEvent(self, event):
+        QApplication.processEvents()  # Ensure the UI updates properly when closing
+        event.accept()
+
+
+class LoadingDialogContextManager:
+    def __init__(self, parent, title="Please Wait", text="Processing, please wait..."):
+        self.dialog = LoadingDialog(parent, title=title, text=text)
+
+    def __enter__(self):
+        self.dialog.show()
+        QApplication.processEvents()  # Ensure the dialog is shown immediately
+        return self.dialog
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.dialog.close()
+        QApplication.processEvents()  # Ensure the dialog closes properly
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Cover Letter Generator")
 
         self.settings = Settings()
+
+        # Set the initial window size
+        self.resize(1200, 800)  # width: 1200, height: 800
 
         # Central widget
         self.central_widget = QWidget()
@@ -161,6 +219,11 @@ class MainWindow(QMainWindow):
 
         # Check settings on startup
         self.check_settings()
+
+        # ChatGPT integration
+        self.llm = ChatOpenAI(model='gpt-4o', openai_api_key=self.settings.api_key)
+        self.memory = ConversationBufferMemory()
+        self.chain = ConversationChain(llm=self.llm, memory=self.memory)
 
     def create_tabs(self):
         # Tab 1 - Paste Webpage
@@ -218,18 +281,14 @@ class MainWindow(QMainWindow):
         if user_message:
             self.chat_display.append(f"You: {user_message}")
             self.chat_input.clear()
-            
-            # TODO: ChatGPT integration
-            # Generate a random reply
-            responses = [
-                "Hello! How can I help you today?",
-                "I'm here to assist you.",
-                "Can you please elaborate?",
-                "Thank you for your message.",
-                "I'm not sure I understand. Can you clarify?"
-            ]
-            random_reply = random.choice(responses)
-            self.chat_display.append(f"Bot: {random_reply}")
+
+        with LoadingDialogContextManager(self, title="Processing", text="Processing, please wait..."):
+            with ThreadPoolExecutor() as executor:
+                future = executor.submit(self.call_send_message, user_message)
+                response, updated_cover_letter = future.result()  # Wait for the result
+
+            self.chat_display.append(f"Bot: {response}")
+            self.cover_letter_display.setPlainText(updated_cover_letter)
 
     # Check that the API key, resume, and initial prompt are non-empty every time the app starts.
     def check_settings(self):
@@ -268,40 +327,53 @@ class MainWindow(QMainWindow):
         if self.html_editor.toPlainText().strip() == "":
             QMessageBox.warning(self, "Incomplete Action", "Please paste the webpage content before generating a cover letter.")
         else:
-            # Generate and display the mock cover letter
-            self.cover_letter_display.setPlainText(self.generate_mock_cover_letter())
-            self.tab_widget.setCurrentIndex(1)
+            with LoadingDialogContextManager(self, title="Generating Cover Letter", text="Generating cover letter, please wait..."):
+                with ThreadPoolExecutor() as executor:
+                    future = executor.submit(self.call_generate_cover_letter)
+                    cover_letter = future.result()  # Wait for the result
 
-    def generate_mock_cover_letter(self):
-        # TODO: ChatGPT integration
-        # Here is a simple mock cover letter template
-        cover_letter = (
-            "Dear Hiring Manager,\n\n"
-            "I am writing to express my interest in the [Position Name] at [Company Name] as advertised. "
-            "With a strong background in [Relevant Skills] and a proven track record in [Relevant Achievements], "
-            "I am confident in my ability to contribute to your team.\n\n"
-            "Throughout my career, I have developed a passion for [Field or Industry] and have honed my skills in [Specific Skills]. "
-            "I am particularly excited about this opportunity because of [Reasons You're Interested in the Company or Role].\n\n"
-            "I am eager to bring my expertise in [Your Expertise] to [Company Name] and am confident that my background makes me a strong candidate for this position.\n\n"
-            "Thank you for considering my application. I look forward to the possibility of discussing this exciting opportunity with you further.\n\n"
-            "Sincerely,\n"
-            "[Your Name]"
-        )
-        return cover_letter
+                self.cover_letter_display.setPlainText(cover_letter)
+                self.tab_widget.setCurrentIndex(1)
 
     def go_to_paste_webpage(self):
-        self.tab_widget.setCurrentIndex(0)
+        current_index = self.tab_widget.currentIndex()  # Define current_index here
 
-        # Modify the go_to_next_tab() method to include a check ensuring that the HTML editor in the first tab is not empty before allowing navigation to the next tab.
-        if current_index == 0 and self.html_editor.toPlainText().strip() == "":
-            QMessageBox.warning(self, "Incomplete Action", "Please paste the webpage content before proceeding.")
-        elif current_index < self.tab_widget.count() - 1:
-            self.tab_widget.setCurrentIndex(current_index + 1)
+        if current_index == 1 and self.html_editor.toPlainText().strip() == "":
+            QMessageBox.warning(self, "Incomplete Action", "Please paste the webpage content before generating a cover letter.")
+        else:
+            self.tab_widget.setCurrentIndex(0)  # Navigate to the first tab (Paste Webpage)
 
     def copy_cover_letter_to_clipboard(self):
         clipboard = QApplication.clipboard()
         clipboard.setText(self.cover_letter_display.toPlainText())
         self.status_bar.showMessage("Cover letter copied to clipboard.")
+
+    def call_generate_cover_letter(self):
+        # Clear the conversation memory
+        self.memory.clear()
+
+        # Generate a cover letter using ChatGPT
+        prompt_components = [
+            self.settings.initial_prompt,
+            'Here is the resume:',
+            '```',
+            self.settings.resume,
+            '```',
+            'Here is the webpage content:',
+            '```',
+            self.html_editor.toPlainText().strip(),
+            '```',
+        ]
+        prompt = '\n'.join(prompt_components)
+
+        cover_letter, tokens = count_tokens(self.chain, prompt)
+        
+        return cover_letter
+
+    def call_send_message(self, user_message):
+        response = self.chain.run(input=user_message)
+        updated_cover_letter = self.chain.run(input="Please generate an updated cover letter.")
+        return response, updated_cover_letter
 
 if __name__ == "__main__":
     app = QApplication([])
